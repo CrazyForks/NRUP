@@ -81,6 +81,21 @@ func (mc *NDTLSConn) Write(p []byte) (int, error) {
 	nonceSize := mc.aead.NonceSize()
 	overhead := mc.aead.Overhead()
 	payloadLen := nonceSize + len(p) + overhead
+
+	// 无伪装模式：跳过DTLS record header
+	if mc.disgui == "none" || mc.disgui == "" {
+		buf := make([]byte, payloadLen)
+		nonce := buf[:nonceSize]
+		if nonceSize > 0 {
+			io.ReadFull(rand.Reader, nonce)
+		}
+		mc.aead.Seal(buf[nonceSize:nonceSize], nonce, p, nil)
+		mc.writeSeq.Add(1)
+		_, err := mc.udpConn.WriteTo(buf, mc.remoteAddr)
+		if err != nil { return 0, err }
+		return len(p), nil
+	}
+
 	totalLen := recordHeaderLen + payloadLen
 
 	// 单次分配：record header + nonce + ciphertext
@@ -140,6 +155,22 @@ func (mc *NDTLSConn) Read(p []byte) (int, error) {
 	n, _, err := mc.udpConn.ReadFrom(buf)
 	if err != nil {
 		return 0, err
+	}
+
+	// 无伪装模式：直接解密，无record header
+	if mc.disgui == "none" || mc.disgui == "" {
+		nonceSize := mc.aead.NonceSize()
+		if n < nonceSize {
+			return 0, errors.New("packet too short")
+		}
+		nonce := buf[:nonceSize]
+		ciphertext := buf[nonceSize:n]
+		plaintext, err := mc.aead.Open(nil, nonce, ciphertext, nil)
+		if err != nil {
+			return 0, err
+		}
+		copy(p, plaintext)
+		return len(plaintext), nil
 	}
 
 	if n < recordHeaderLen {

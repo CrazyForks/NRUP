@@ -390,3 +390,59 @@ func TestCipherNone(t *testing.T) {
 	}
 	t.Logf("✅ CipherNone echo OK (zero overhead)")
 }
+
+func TestDisguiseNone(t *testing.T) {
+	// 专线模式：加密但无伪装
+	cfg := &Config{FECData: 8, FECParity: 4, Disguise: "none"}
+	
+	listener, _ := Listen(":0", cfg)
+	defer listener.Close()
+
+	go func() {
+		conn, _ := listener.Accept()
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+		conn.Write(buf[:n])
+	}()
+
+	conn, _ := Dial(listener.Addr().String(), cfg)
+	defer conn.Close()
+
+	conn.Write([]byte("encrypted-no-disguise"))
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	
+	if string(buf[:n]) != "encrypted-no-disguise" {
+		t.Fatalf("mismatch: %q", string(buf[:n]))
+	}
+	t.Logf("✅ 专线模式: 加密✅ 伪装❌ 开销=nonce+tag(28B)")
+}
+
+func TestPlainUDP(t *testing.T) {
+	// 内网模式：无加密无伪装
+	cfg := &Config{FECData: 8, FECParity: 4, Cipher: CipherNone, Disguise: "none"}
+	
+	listener, _ := Listen(":0", cfg)
+	defer listener.Close()
+
+	go func() {
+		conn, _ := listener.Accept()
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+		conn.Write(buf[:n])
+	}()
+
+	conn, _ := Dial(listener.Addr().String(), cfg)
+	defer conn.Close()
+
+	conn.Write([]byte("plain-udp-fec-only"))
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	
+	if string(buf[:n]) != "plain-udp-fec-only" {
+		t.Fatalf("mismatch: %q", string(buf[:n]))
+	}
+	t.Logf("✅ 内网模式: 加密❌ 伪装❌ 开销=0B (纯FEC+ARQ)")
+}

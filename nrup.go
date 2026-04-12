@@ -25,6 +25,7 @@ type Config struct {
 	Disguise      string // 伪装模式: "anyconnect"(默认) / "quic"
 	DisguiseSNI   string // QUIC伪装时嵌入的SNI
 	Logger        Logger // 日志接口(默认静默)
+	SmallPacketThreshold int // 小包冗余阈值(字节,默认256)
 
 	HandshakeTimeout time.Duration
 	IdleTimeout      time.Duration
@@ -37,11 +38,13 @@ func DefaultConfig() *Config {
 		FECParity:        4,
 		HandshakeTimeout: 10 * time.Second,
 		IdleTimeout:      120 * time.Second,
+		SmallPacketThreshold: 256,
 	}
 }
 
 // Conn NRUP连接
 type Conn struct {
+	cfg        *Config
 	dtls       net.Conn
 	fec        *FECCodec
 	cc         *CongestionController
@@ -69,7 +72,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 	}
 
 	// 小包优化：数据<256字节时不拆分FEC，直接发2份冗余
-	if len(p) < 256 {
+	threshold := c.smallThreshold(); if len(p) < threshold {
 		seq := uint32(c.pktsSent.Add(1))
 		// [FrameData][4B seq][data]
 		pkt := make([]byte, 1+4+len(p))
@@ -146,6 +149,9 @@ func (c *Conn) Read(p []byte) (int, error) {
 				}
 				continue
 
+			case FrameClose:
+				c.closed.Store(true)
+				return 0, net.ErrClosed
 			case FramePing:
 				// 回复Ping
 				continue
@@ -326,4 +332,21 @@ func (c *Conn) smallPktSeen(seq uint32) bool {
 		}
 	}
 	return false
+}
+
+func (c *Conn) smallThreshold() int {
+	if c.cfg != nil && c.cfg.SmallPacketThreshold > 0 {
+		return c.cfg.SmallPacketThreshold
+	}
+	return 256
+}
+
+// CloseGraceful 优雅关闭（通知对端）
+func (c *Conn) CloseGraceful() error {
+	// 发送关闭帧
+	c.dtls.Write([]byte{FrameClose})
+	c.dtls.Write([]byte{FrameClose}) // 冗余
+	time.Sleep(50 * time.Millisecond)
+	c.closed.Store(true)
+	return c.dtls.Close()
 }

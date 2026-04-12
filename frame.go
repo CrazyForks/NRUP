@@ -6,9 +6,10 @@ import (
 
 // 帧类型
 const (
-	FrameData = 0x01 // 数据帧
-	FrameACK  = 0x02 // 确认帧
-	FramePing = 0x03 // 心跳帧
+	FrameData  = 0x01 // 数据帧
+	FrameACK   = 0x02 // 确认帧
+	FramePing  = 0x03 // 心跳帧
+	FrameClose = 0x05 // 关闭帧
 )
 
 // DataFrame 数据帧

@@ -123,7 +123,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	if n > 0 && buf[0] == frameResume {
 		if key, sid, ok := serverResume(l.udpConn, clientAddr, buf[:n]); ok {
 			dtlsConn, _ := NewNDTLS(dc, clientAddr, key, l.cfg)
-			conn := &Conn{dtls: dtlsConn, fec: NewFECCodec(l.cfg.FECData, l.cfg.FECParity),
+			conn := &Conn{cfg: l.cfg, dtls: dtlsConn, fec: NewFECCodec(l.cfg.FECData, l.cfg.FECParity),
 				cc: NewCongestionController(l.cfg.MaxBandwidthMbps*1000000/8),
 				seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(l.cfg.FECData, l.cfg.FECParity),
 				retransmit: NewRetransmitQueue(), streamMode: l.cfg.StreamMode, sessionID: sid}

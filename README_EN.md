@@ -21,8 +21,8 @@ NRUP builds a complete reliable transport mechanism on top of UDP while preservi
 | 1% loss + 50ms | 100% | ✅ FEC recovery |
 | 5% loss + 100ms | 100% | ✅ FEC recovery |
 | 10% loss + 100ms | 100% | ✅ FEC + ARQ |
-| 20% loss + 200ms | 63%+ | ⚠️ Usable |
-| 30% loss + 200ms | 90% | ✅ Small packet redundancy |
+| 20% loss + 200ms | 90% | ✅ Redundant send |
+| 30% loss + 200ms | 93% | ✅ Small packet redundancy |
 
 Tested with tc netem, 30 connections per scenario.
 

@@ -361,3 +361,32 @@ func Test0RTTResume(t *testing.T) {
 	n, _ = conn2.Read(buf)
 	t.Logf("✅ 0-RTT resume: echo=%q, sessionID=%s", string(buf[:n]), conn2.SessionID()[:8])
 }
+
+func TestCipherNone(t *testing.T) {
+	cfg := &Config{FECData: 8, FECParity: 4, Cipher: CipherNone}
+	
+	listener, err := Listen(":0", cfg)
+	if err != nil { t.Fatal(err) }
+	defer listener.Close()
+
+	go func() {
+		conn, _ := listener.Accept()
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+		conn.Write(buf[:n])
+	}()
+
+	conn, err := Dial(listener.Addr().String(), cfg)
+	if err != nil { t.Fatal(err) }
+	defer conn.Close()
+
+	conn.Write([]byte("no-encryption-test"))
+	buf := make([]byte, 4096)
+	n, _ := conn.Read(buf)
+	
+	if string(buf[:n]) != "no-encryption-test" {
+		t.Fatalf("echo mismatch: %q", string(buf[:n]))
+	}
+	t.Logf("✅ CipherNone echo OK (zero overhead)")
+}

@@ -17,10 +17,14 @@ const (
 	CipherChaCha20     CipherType = "chacha20-poly1305"
 	CipherXChaCha20    CipherType = "xchacha20-poly1305"
 	CipherAuto         CipherType = "auto" // 根据平台自动选择
+	CipherNone         CipherType = "none"     // 不加密（专线/内网场景）
 )
 
 // newAEAD 创建AEAD加密器
 func newAEAD(key []byte, cipherType CipherType) (cipher.AEAD, error) {
+	if cipherType == CipherNone {
+		return &noopAEAD{}, nil
+	}
 	if cipherType == "" || cipherType == CipherAuto {
 		cipherType = detectBestCipher()
 	}
@@ -68,4 +72,18 @@ func detectBestCipher() CipherType {
 	default:
 		return CipherAES256GCM
 	}
+}
+
+// noopAEAD 无加密AEAD（专线/内网场景，零开销）
+type noopAEAD struct{}
+
+func (n *noopAEAD) NonceSize() int { return 0 }
+func (n *noopAEAD) Overhead() int  { return 0 }
+
+func (n *noopAEAD) Seal(dst, nonce, plaintext, additionalData []byte) []byte {
+	return append(dst, plaintext...)
+}
+
+func (n *noopAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	return append(dst, ciphertext...), nil
 }

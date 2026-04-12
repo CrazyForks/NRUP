@@ -31,7 +31,7 @@ var anyconnectCipherSuites = []byte{
 	0x00, 0xFF, // TLS_EMPTY_RENEGOTIATION_INFO_SCSV
 }
 
-// clientHandshake X25519密钥交换，伪装AnyConnect DTLS握手
+// clientHandshake X25519密钥交换，AnyConnect兼容DTLS握手
 func clientHandshake(conn *net.UDPConn, serverAddr *net.UDPAddr, cfg *Config) ([]byte, error) {
 	// 生成X25519密钥对
 	var clientPrivate, clientPublic [32]byte
@@ -162,7 +162,7 @@ func serverHandshake(conn *net.UDPConn, clientAddr *net.UDPAddr, firstPacket []b
 	}
 	conn.WriteToUDP(hello, clientAddr)
 
-	// 发送Certificate消息（AnyConnect伪装，QUIC模式跳过）
+	// 发送Certificate消息（AnyConnect模式发送，QUIC模式跳过）
 	if cfg.Disguise != "quic" && len(cfg.CertDER) > 0 {
 		certMsg := buildDTLSCertificate(cfg.CertDER)
 		conn.WriteToUDP(certMsg, clientAddr)

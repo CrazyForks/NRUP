@@ -13,7 +13,7 @@ import (
 )
 
 // nDTLS 最小DTLS实现
-// 只实现记录层格式（让GFW看到标准DTLS）
+// 只实现记录层格式（标准DTLS记录层格式）
 // 内部用AES-256-GCM加密
 //
 // DTLS 1.2 Record Layer:
@@ -31,6 +31,7 @@ type NDTLSConn struct {
 	udpConn    net.PacketConn
 	remoteAddr net.Addr
 	aead       cipher.AEAD
+	disgui    string // "anyconnect" / "quic"
 	
 	writeEpoch uint16
 	writeSeq   atomic.Uint64
@@ -61,6 +62,7 @@ func NewNDTLS(conn net.PacketConn, remoteAddr net.Addr, key []byte, cfg *Config)
 		udpConn:    conn,
 		remoteAddr: remoteAddr,
 		aead:       aead,
+		disgui:    cfg.Disguise,
 		writeEpoch: 1,
 		fec:        NewFECCodec(cfg.FECData, cfg.FECParity),
 		cc:         NewCongestionController(cfg.MaxBandwidthMbps * 1000000 / 8),
@@ -91,18 +93,37 @@ func (mc *NDTLSConn) Write(p []byte) (int, error) {
 	// 加密（直接写入buf）
 	mc.aead.Seal(buf[recordHeaderLen+nonceSize:recordHeaderLen+nonceSize], nonce, p, nil)
 
-	// DTLS记录头
 	seqNum := mc.writeSeq.Add(1)
-	buf[0] = contentAppData
-	binary.BigEndian.PutUint16(buf[1:3], dtlsVersion)
-	binary.BigEndian.PutUint16(buf[3:5], mc.writeEpoch)
-	buf[5] = byte(seqNum >> 40)
-	buf[6] = byte(seqNum >> 32)
-	buf[7] = byte(seqNum >> 24)
-	buf[8] = byte(seqNum >> 16)
-	buf[9] = byte(seqNum >> 8)
-	buf[10] = byte(seqNum)
-	binary.BigEndian.PutUint16(buf[11:13], uint16(payloadLen))
+	if mc.disgui == "quic" {
+		// QUIC Short Header: [0x40|PN_LEN][8B connID][2B pktNum][payload]
+		buf[0] = 0x40 | 0x01 // Fixed bit + 2-byte PN
+		// Connection ID (用epoch+seq低6字节模拟)
+		buf[1] = byte(mc.writeEpoch >> 8)
+		buf[2] = byte(mc.writeEpoch)
+		buf[3] = byte(seqNum >> 40)
+		buf[4] = byte(seqNum >> 32)
+		buf[5] = byte(seqNum >> 24)
+		buf[6] = byte(seqNum >> 16)
+		buf[7] = byte(seqNum >> 8)
+		buf[8] = byte(seqNum)
+		// Packet Number (2 bytes)
+		buf[9] = byte(seqNum >> 8)
+		buf[10] = byte(seqNum)
+		// Length (2 bytes, same position as DTLS)
+		binary.BigEndian.PutUint16(buf[11:13], uint16(payloadLen))
+	} else {
+		// DTLS记录头
+		buf[0] = contentAppData
+		binary.BigEndian.PutUint16(buf[1:3], dtlsVersion)
+		binary.BigEndian.PutUint16(buf[3:5], mc.writeEpoch)
+		buf[5] = byte(seqNum >> 40)
+		buf[6] = byte(seqNum >> 32)
+		buf[7] = byte(seqNum >> 24)
+		buf[8] = byte(seqNum >> 16)
+		buf[9] = byte(seqNum >> 8)
+		buf[10] = byte(seqNum)
+		binary.BigEndian.PutUint16(buf[11:13], uint16(payloadLen))
+	}
 
 	mc.cc.Wait(totalLen)
 
@@ -125,16 +146,24 @@ func (mc *NDTLSConn) Read(p []byte) (int, error) {
 		return 0, errors.New("record too short")
 	}
 
-	// 验证DTLS记录头
-	contentType := buf[0]
-	version := binary.BigEndian.Uint16(buf[1:3])
-	// 提取序列号（48位）
-	recvSeq := uint64(buf[5])<<40 | uint64(buf[6])<<32 | uint64(buf[7])<<24 |
-		uint64(buf[8])<<16 | uint64(buf[9])<<8 | uint64(buf[10])
-	payloadLen := binary.BigEndian.Uint16(buf[11:13])
-
-	if contentType != contentAppData || version != dtlsVersion {
-		return 0, errors.New("invalid DTLS record")
+	// 解析记录头（自动检测DTLS/QUIC格式）
+	var recvSeq uint64
+	var payloadLen uint16
+	if buf[0]&0x80 == 0 && buf[0]&0x40 != 0 {
+		// QUIC Short Header
+		recvSeq = uint64(buf[3])<<40 | uint64(buf[4])<<32 | uint64(buf[5])<<24 |
+			uint64(buf[6])<<16 | uint64(buf[7])<<8 | uint64(buf[8])
+		payloadLen = binary.BigEndian.Uint16(buf[11:13])
+	} else {
+		// DTLS记录头
+		contentType := buf[0]
+		version := binary.BigEndian.Uint16(buf[1:3])
+		if contentType != contentAppData || version != dtlsVersion {
+			return 0, errors.New("invalid record")
+		}
+		recvSeq = uint64(buf[5])<<40 | uint64(buf[6])<<32 | uint64(buf[7])<<24 |
+			uint64(buf[8])<<16 | uint64(buf[9])<<8 | uint64(buf[10])
+		payloadLen = binary.BigEndian.Uint16(buf[11:13])
 	}
 
 	// 防重放检查

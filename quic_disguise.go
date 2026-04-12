@@ -101,7 +101,12 @@ func buildQUICInitial(random, pubkey []byte, isClient bool, sni ...string) []byt
 
 // parseQUICInitial 从QUIC Initial包中提取random和pubkey
 func parseQUICInitial(pkt []byte) (random, pubkey []byte, err error) {
-	if len(pkt) < 20 {
+	defer func() {
+		if r := recover(); r != nil {
+			random, pubkey, err = nil, nil, errNotDTLS
+		}
+	}()
+	if len(pkt) < 30 {
 		return nil, nil, errNotDTLS
 	}
 	// 验证Header Form bit
@@ -133,8 +138,14 @@ func parseQUICInitial(pkt []byte) (random, pubkey []byte, err error) {
 	offset += scidLen
 
 	// Token length
+	if len(pkt) <= offset {
+		return nil, nil, errNotDTLS
+	}
 	tokenLen := int(pkt[offset])
 	offset++
+	if len(pkt) < offset+tokenLen {
+		return nil, nil, errNotDTLS
+	}
 	offset += tokenLen
 
 	// Length (2-byte variable-length int)
@@ -146,6 +157,9 @@ func parseQUICInitial(pkt []byte) (random, pubkey []byte, err error) {
 	_ = payloadLen
 
 	// Skip packet number (4 bytes)
+	if len(pkt) < offset+4 {
+		return nil, nil, errNotDTLS
+	}
 	offset += 4
 
 	// CRYPTO frame

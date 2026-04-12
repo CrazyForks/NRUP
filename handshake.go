@@ -49,7 +49,7 @@ func clientHandshake(conn *net.UDPConn, serverAddr *net.UDPAddr, cfg *Config) ([
 	} else {
 		hello = buildAnyConnectClientHello(clientRandom, clientPublic[:])
 	}
-	// 发送ClientHello（超时重发，最多3次）
+	// 发送ClientHello
 	conn.WriteToUDP(hello, serverAddr)
 
 	// 读响应（超时重发ClientHello，最多3次）
@@ -97,11 +97,15 @@ func clientHandshake(conn *net.UDPConn, serverAddr *net.UDPAddr, cfg *Config) ([
 		return nil, err2
 	}
 
-	// 跳过Certificate消息（AnyConnect模式且服务端配了证书时会发）
+	// 消费多余的握手包（重复的ServerHello、Certificate等）
 	if cfg.Disguise != "quic" {
-		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		if cn, _, cerr := conn.ReadFromUDP(buf); cerr == nil && cn > 13 && buf[0] == 22 && cn > 25 && buf[13] == 11 {
-			// Certificate消息，忽略
+		for i := 0; i < 3; i++ {
+			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			cn, _, cerr := conn.ReadFromUDP(buf)
+			if cerr != nil { break }
+			// ServerHello或Certificate，继续消费
+			if cn > 13 && buf[0] == 22 { continue }
+			break
 		}
 		conn.SetReadDeadline(time.Time{})
 	}

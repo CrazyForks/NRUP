@@ -23,7 +23,8 @@ type Config struct {
 	PeerPublicKey []byte // 对方Ed25519公钥(32字节)
 	CertDER       []byte // TLS证书DER格式(嵌入DTLS ServerHello)
 	Disguise      string // 伪装模式: "anyconnect"(默认) / "quic"
-	DisguiseSNI   string // QUIC伪装时嵌入的SNI(用于QUIC Initial包的SNI字段)
+	DisguiseSNI   string // QUIC伪装时嵌入的SNI
+	Logger        Logger // 日志接口(默认静默)
 
 	HandshakeTimeout time.Duration
 	IdleTimeout      time.Duration
@@ -141,6 +142,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 				decoded := c.fec.Decode(payload)
 				if decoded != nil {
 					c.bytesRecv.Add(int64(len(decoded)))
+					c.pktsRecv.Add(1)
 					copy(p, decoded)
 					return len(decoded), nil
 				}
@@ -242,4 +244,38 @@ func (c *Conn) DiscoverMTU() int {
 		}
 	}
 	return 1200 // 安全默认值
+}
+
+// Logger 日志接口
+type Logger interface {
+	Debug(format string, args ...interface{})
+	Error(format string, args ...interface{})
+}
+
+// noopLogger 默认静默日志
+type noopLogger struct{}
+func (noopLogger) Debug(string, ...interface{}) {}
+func (noopLogger) Error(string, ...interface{}) {}
+
+// Metrics 连接指标
+type Metrics struct {
+	HandshakeOK   int64   `json:"handshake_ok"`
+	HandshakeFail int64   `json:"handshake_fail"`
+	PacketsSent   int64   `json:"packets_sent"`
+	PacketsRecv   int64   `json:"packets_recv"`
+	BytesSent     int64   `json:"bytes_sent"`
+	BytesRecv     int64   `json:"bytes_recv"`
+	RetransmitCount int64 `json:"retransmit_count"`
+	FECRecovery   int64   `json:"fec_recovery"`
+	LossRate      float64 `json:"loss_rate"`
+}
+
+// GetMetrics 获取连接指标
+func (c *Conn) GetMetrics() Metrics {
+	return Metrics{
+		PacketsSent: c.pktsSent.Load(),
+		PacketsRecv: c.pktsRecv.Load(),
+		BytesSent:   c.bytesSent.Load(),
+		BytesRecv:   c.bytesRecv.Load(),
+	}
 }

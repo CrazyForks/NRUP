@@ -167,7 +167,7 @@ DPI 检测结果：标准 AnyConnect VPN 连接。
 ### 已知限制
 
 - 无证书/PKI体系，依赖PSK分发
-- 单Listener同时只能服务一个Accept（待改进）
+- ~~单Listener同时只能服务一个Accept~~ ✅ 已修复(v1.0.1 UDP demux)
 - 未经过正式密码学审计（Tamarin/ProVerif）
 
 ## 示例

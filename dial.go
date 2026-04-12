@@ -2,7 +2,6 @@ package nrup
 
 import (
 	"crypto/rand"
-	"fmt"
 	"net"
 	"time"
 )
@@ -70,6 +69,7 @@ func Dial(addr string, cfg *Config) (*Conn, error) {
 
 // Listener NRUP服务端监听
 type Listener struct {
+	demux        *udpDemux
 	cookieSecret []byte
 	udpConn *net.UDPConn
 	cfg     *Config
@@ -94,22 +94,26 @@ func Listen(addr string, cfg *Config) (*Listener, error) {
 
 	secret := make([]byte, 32)
 	rand.Read(secret)
-	return &Listener{udpConn: udpConn, cfg: cfg, cookieSecret: secret}, nil
+	dmx := newUDPDemux(udpConn)
+	return &Listener{udpConn: udpConn, cfg: cfg, cookieSecret: secret, demux: dmx}, nil
 }
 
 // Accept 接受NRUP连接
 func (l *Listener) Accept() (*Conn, error) {
-	// 读ClientHello
-	buf := make([]byte, 4096)
-	n, clientAddr, err := l.udpConn.ReadFromUDP(buf)
-	if err != nil {
-		return nil, err
+	// 等待新连接（demux按源地址分发）
+	dc, ok := <-l.demux.newConns
+	if !ok {
+		return nil, net.ErrClosed
 	}
 
-	// 0-RTT快速重连（Resume帧跳过Cookie和握手）
+	buf := make([]byte, 4096)
+	n, _, _ := dc.ReadFrom(buf)
+	clientAddr := dc.remoteAddr
+
+	// 0-RTT快速重连
 	if n > 0 && buf[0] == frameResume {
 		if key, sid, ok := serverResume(l.udpConn, clientAddr, buf[:n]); ok {
-			dtlsConn, _ := NewNDTLS(l.udpConn, clientAddr, key, l.cfg)
+			dtlsConn, _ := NewNDTLS(dc, clientAddr, key, l.cfg)
 			conn := &Conn{dtls: dtlsConn, fec: NewFECCodec(l.cfg.FECData, l.cfg.FECParity),
 				cc: NewCongestionController(l.cfg.MaxBandwidthMbps*1000000/8),
 				seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(l.cfg.FECData, l.cfg.FECParity),
@@ -119,23 +123,14 @@ func (l *Listener) Accept() (*Conn, error) {
 		}
 	}
 
-	// Cookie防DoS: 发HelloVerifyRequest，等重发
+	// Cookie防DoS
 	if len(l.cookieSecret) > 0 {
 		cookie := generateCookie(clientAddr, l.cookieSecret)
 		hvr := buildHelloVerifyRequest(cookie)
 		l.udpConn.WriteToUDP(hvr, clientAddr)
-
-		// 等客户端重发带Cookie的ClientHello
-		l.udpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		n, clientAddr, err = l.udpConn.ReadFromUDP(buf)
-		l.udpConn.SetReadDeadline(time.Time{})
-		if err != nil {
-			return nil, err
-		}
-		// 验证Cookie（防伪造）
-		if !verifyCookie(clientAddr, generateCookie(clientAddr, l.cookieSecret), l.cookieSecret) {
-			return nil, fmt.Errorf("invalid cookie")
-		}
+		n2, _, err := dc.ReadFrom(buf)
+		if err != nil { return nil, err }
+		n = n2
 	}
 
 	// X25519握手
@@ -145,7 +140,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	}
 
 	// 创建nDTLS加密连接
-	dtlsConn, err := NewNDTLS(l.udpConn, clientAddr, key, l.cfg)
+	dtlsConn, err := NewNDTLS(dc, clientAddr, key, l.cfg)
 	if err != nil {
 		return nil, err
 	}

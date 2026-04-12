@@ -156,7 +156,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	}
 
 	// X25519握手
-	key, err := serverHandshake(l.udpConn, clientAddr, buf[:n], l.cfg)
+	key, err := serverHandshake(dc, clientAddr, buf[:n], l.cfg)
 	if err != nil {
 		return nil, err
 	}

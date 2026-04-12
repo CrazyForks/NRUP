@@ -154,7 +154,7 @@ func clientHandshake(conn *net.UDPConn, serverAddr *net.UDPAddr, cfg *Config) ([
 }
 
 // serverHandshake 服务端握手
-func serverHandshake(conn *net.UDPConn, clientAddr *net.UDPAddr, firstPacket []byte, cfg *Config) ([]byte, error) {
+func serverHandshake(conn net.PacketConn, clientAddr net.Addr, firstPacket []byte, cfg *Config) ([]byte, error) {
 	var clientRandom, clientPublic []byte
 	var err error
 	if cfg.Disguise == "quic" {
@@ -180,12 +180,13 @@ func serverHandshake(conn *net.UDPConn, clientAddr *net.UDPAddr, firstPacket []b
 	} else {
 		hello = buildAnyConnectServerHello(serverRandom, serverPublic[:])
 	}
-	conn.WriteToUDP(hello, clientAddr)
+	conn.WriteTo(hello, clientAddr)
+	conn.WriteTo(hello, clientAddr) // 冗余副本
 
 	// 发送Certificate消息（AnyConnect模式发送，QUIC模式跳过）
 	if cfg.Disguise != "quic" && len(cfg.CertDER) > 0 {
 		certMsg := buildDTLSCertificate(cfg.CertDER)
-		conn.WriteToUDP(certMsg, clientAddr)
+		conn.WriteTo(certMsg, clientAddr)
 	}
 
 	var sharedSecret, clientPub [32]byte
@@ -197,23 +198,23 @@ func serverHandshake(conn *net.UDPConn, clientAddr *net.UDPAddr, firstPacket []b
 	// TODO: Ed25519在demux模式下需要通过虚拟连接收发签名
 	// Ed25519签名认证
 	if cfg.AuthMode == "ed25519" && len(cfg.PrivateKey) > 0 && len(cfg.PeerPublicKey) > 0 {
-		conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
+		conn.SetDeadline(time.Now().Add(handshakeTimeout))
 		sigBuf := make([]byte, 128)
-		sn, _, _ := conn.ReadFromUDP(sigBuf)
+		sn, _, _ := conn.ReadFrom(sigBuf)
 		if !verifyHandshakeSignature(cfg.PeerPublicKey, sigBuf[:sn], sharedSecret[:], clientRandom, serverRandom) {
 			return nil, fmt.Errorf("ed25519 verify failed")
 		}
 		sig := signHandshake(cfg.PrivateKey, sharedSecret[:], serverRandom, clientRandom)
-		conn.WriteToUDP(sig, clientAddr)
-		conn.SetReadDeadline(time.Time{})
+		conn.WriteTo(sig, clientAddr)
+		conn.SetDeadline(time.Time{})
 	}
 
 	// PSK认证（防MITM）
 	if len(cfg.PSK) > 0 {
 		// 接收客户端认证
 		macBuf := make([]byte, 32)
-		conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
-		n, _, err := conn.ReadFromUDP(macBuf)
+		conn.SetDeadline(time.Now().Add(handshakeTimeout))
+		n, _, err := conn.ReadFrom(macBuf)
 		if err != nil || n != 32 {
 			return nil, fmt.Errorf("auth timeout") // 静默丢弃
 		}
@@ -223,8 +224,8 @@ func serverHandshake(conn *net.UDPConn, clientAddr *net.UDPAddr, firstPacket []b
 		}
 		// 发送服务端认证
 		serverMAC := verifyPSK(cfg.PSK, sharedSecret[:], serverRandom, clientRandom)
-		conn.WriteToUDP(serverMAC, clientAddr)
-		conn.SetReadDeadline(time.Time{})
+		conn.WriteTo(serverMAC, clientAddr)
+		conn.SetDeadline(time.Time{})
 	}
 
 	return key, nil

@@ -1,6 +1,7 @@
 package nrup
 
 import (
+	"crypto/ed25519"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -283,4 +284,33 @@ func TestQUICDisguiseWithSNI(t *testing.T) {
 
 	conn.Write([]byte("quic-with-sni"))
 	t.Logf("✅ QUIC+SNI disguise: connected (SNI=www.apple.com)")
+}
+
+func TestEd25519Auth(t *testing.T) {
+	serverPub, serverPriv, _ := ed25519.GenerateKey(nil)
+	clientPub, clientPriv, _ := ed25519.GenerateKey(nil)
+
+	serverCfg := &Config{FECData: 8, FECParity: 4, AuthMode: "ed25519",
+		PrivateKey: serverPriv, PeerPublicKey: clientPub}
+	clientCfg := &Config{FECData: 8, FECParity: 4, AuthMode: "ed25519",
+		PrivateKey: clientPriv, PeerPublicKey: serverPub}
+
+	listener, err := Listen(":0", serverCfg)
+	if err != nil { t.Fatal(err) }
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil { t.Logf("Accept err: %v", err); return }
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		conn.Read(buf)
+	}()
+
+	conn, err := Dial(listener.Addr().String(), clientCfg)
+	if err != nil { t.Fatal("Ed25519 dial:", err) }
+	defer conn.Close()
+
+	conn.Write([]byte("ed25519-authenticated"))
+	t.Logf("✅ Ed25519 auth OK (session: %s)", conn.SessionID()[:8])
 }

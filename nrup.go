@@ -61,6 +61,7 @@ type Conn struct {
 	readBuf    []byte
 	seenSmall  map[uint32]bool
 	streamEnc  *StreamEncoder
+	smoothedLoss float64 // EWMA平滑丢包率
 	sessionID  string // 连接迁移用
 }
 
@@ -86,12 +87,13 @@ func (c *Conn) Write(p []byte) (int, error) {
 		// 自适应冗余：根据实时丢包率动态调整副本数
 		redundancy := 2
 		m := c.GetMetrics()
+		c.smoothedLoss = 0.7*c.smoothedLoss + 0.3*m.LossRate
 		switch {
-		case m.LossRate > 0.50:
+		case c.smoothedLoss > 0.50:
 			redundancy = 5
-		case m.LossRate > 0.35:
+		case c.smoothedLoss > 0.35:
 			redundancy = 4
-		case m.LossRate > 0.20:
+		case c.smoothedLoss > 0.20:
 			redundancy = 3
 		default:
 			redundancy = 2

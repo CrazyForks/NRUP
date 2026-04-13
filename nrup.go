@@ -374,3 +374,19 @@ func (c *Conn) CloseGraceful() error {
 	c.closed.Store(true)
 	return c.dtls.Close()
 }
+
+// dynamicFECParams 根据实时丢包率计算FEC参数
+func dynamicFECParams(lossRate float64) (data, parity int) {
+	switch {
+	case lossRate > 0.45:
+		return 6, 6 // 1:1保护
+	case lossRate > 0.30:
+		return 7, 5
+	case lossRate > 0.20:
+		return 8, 4
+	case lossRate > 0.10:
+		return 9, 3
+	default:
+		return 10, 2
+	}
+}

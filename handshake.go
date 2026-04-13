@@ -49,7 +49,8 @@ func clientHandshake(conn *net.UDPConn, serverAddr *net.UDPAddr, cfg *Config) ([
 	} else {
 		hello = buildAnyConnectClientHello(clientRandom, clientPublic[:])
 	}
-	// 发送ClientHello
+	// 发送ClientHello（双发冗余）
+	conn.WriteToUDP(hello, serverAddr)
 	conn.WriteToUDP(hello, serverAddr)
 
 	// 读响应（超时重发ClientHello，最多3次）
@@ -199,9 +200,18 @@ func serverHandshake(conn net.PacketConn, clientAddr net.Addr, firstPacket []byt
 	// Ed25519签名认证
 	if cfg.AuthMode == "ed25519" && len(cfg.PrivateKey) > 0 && len(cfg.PeerPublicKey) > 0 {
 		conn.SetDeadline(time.Now().Add(handshakeTimeout))
-		sigBuf := make([]byte, 128)
-		sn, _, _ := conn.ReadFrom(sigBuf)
-		if !verifyHandshakeSignature(cfg.PeerPublicKey, sigBuf[:sn], sharedSecret[:], clientRandom, serverRandom) {
+		// 跳过重复的ClientHello，读签名(64字节)
+		var sigData []byte
+		for attempt := 0; attempt < 5; attempt++ {
+			tmp := make([]byte, 2048)
+			n, _, err := conn.ReadFrom(tmp)
+			if err != nil { return nil, fmt.Errorf("ed25519 timeout") }
+			if n > 100 && tmp[0] == 22 { continue }
+			sigData = tmp[:n]
+			break
+		}
+		if sigData == nil { return nil, fmt.Errorf("ed25519 timeout") }
+		if !verifyHandshakeSignature(cfg.PeerPublicKey, sigData, sharedSecret[:], clientRandom, serverRandom) {
 			return nil, fmt.Errorf("ed25519 verify failed")
 		}
 		sig := signHandshake(cfg.PrivateKey, sharedSecret[:], serverRandom, clientRandom)
@@ -211,16 +221,33 @@ func serverHandshake(conn net.PacketConn, clientAddr net.Addr, firstPacket []byt
 
 	// PSK认证（防MITM）
 	if len(cfg.PSK) > 0 {
-		// 接收客户端认证
-		macBuf := make([]byte, 32)
+		// 接收客户端认证（跳过重复的ClientHello）
+		var macBuf []byte
 		conn.SetDeadline(time.Now().Add(handshakeTimeout))
-		n, _, err := conn.ReadFrom(macBuf)
-		if err != nil || n != 32 {
-			return nil, fmt.Errorf("auth timeout") // 静默丢弃
+		for attempt := 0; attempt < 5; attempt++ {
+			tmp := make([]byte, 2048)
+			n, _, err := conn.ReadFrom(tmp)
+			if err != nil {
+				return nil, fmt.Errorf("auth timeout")
+			}
+			// ClientHello: 首字节22 + 长度>100
+			if n > 100 && tmp[0] == 22 {
+				continue // 跳过重复的ClientHello
+			}
+			// PSK HMAC: 恰好32字节
+			if n == 32 {
+				macBuf = tmp[:32]
+				break
+			}
+			// Certificate消息等其他包也跳过
+			continue
+		}
+		if macBuf == nil {
+			return nil, fmt.Errorf("auth timeout")
 		}
 		expected := verifyPSK(cfg.PSK, sharedSecret[:], clientRandom, serverRandom)
-		if !hmac.Equal(macBuf[:n], expected) {
-			return nil, fmt.Errorf("PSK mismatch") // 静默丢弃，不回复对端
+		if !hmac.Equal(macBuf, expected) {
+			return nil, fmt.Errorf("PSK mismatch")
 		}
 		// 发送服务端认证
 		serverMAC := verifyPSK(cfg.PSK, sharedSecret[:], serverRandom, clientRandom)
@@ -228,6 +255,18 @@ func serverHandshake(conn net.PacketConn, clientAddr net.Addr, firstPacket []byt
 		conn.SetDeadline(time.Time{})
 	}
 
+
+	// drain残留握手包（重复的ClientHello/ServerHello等）
+	for i := 0; i < 5; i++ {
+		conn.SetDeadline(time.Now().Add(50 * time.Millisecond))
+		tmp := make([]byte, 2048)
+		n, _, err := conn.ReadFrom(tmp)
+		if err != nil { break }
+		if n > 100 && tmp[0] == 22 { continue } // ClientHello
+		// 其他包放回？不能放回。但此时不应该有数据包。
+		break
+	}
+	conn.SetDeadline(time.Time{})
 	return key, nil
 }
 

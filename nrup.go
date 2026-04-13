@@ -26,6 +26,7 @@ type Config struct {
 	DisguiseSNI   string // QUIC伪装时嵌入的SNI
 	Logger        Logger // 日志接口(默认静默)
 	SmallPacketThreshold int // 小包冗余阈值(字节,默认256)
+	SmoothedLossAlpha   float64 // EWMA系数(默认0.28)
 
 	HandshakeTimeout time.Duration
 	IdleTimeout      time.Duration
@@ -39,6 +40,7 @@ func DefaultConfig() *Config {
 		HandshakeTimeout: 10 * time.Second,
 		IdleTimeout:      120 * time.Second,
 		SmallPacketThreshold: 256,
+		SmoothedLossAlpha:   0.28,
 	}
 }
 
@@ -87,7 +89,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 		// 自适应冗余：根据实时丢包率动态调整副本数
 		redundancy := 2
 		m := c.GetMetrics()
-		c.smoothedLoss = 0.7*c.smoothedLoss + 0.3*m.LossRate
+		alpha := c.smoothAlpha(); c.smoothedLoss = (1-alpha)*c.smoothedLoss + alpha*m.LossRate
 		switch {
 		case c.smoothedLoss > 0.50:
 			redundancy = 5
@@ -319,15 +321,17 @@ type Metrics struct {
 	RetransmitCount int64 `json:"retransmit_count"`
 	FECRecovery   int64   `json:"fec_recovery"`
 	LossRate      float64 `json:"loss_rate"`
+	SmoothedLoss  float64 `json:"smoothed_loss"`
 }
 
 // GetMetrics 获取连接指标
 func (c *Conn) GetMetrics() Metrics {
 	return Metrics{
-		PacketsSent: c.pktsSent.Load(),
-		PacketsRecv: c.pktsRecv.Load(),
-		BytesSent:   c.bytesSent.Load(),
-		BytesRecv:   c.bytesRecv.Load(),
+		PacketsSent:  c.pktsSent.Load(),
+		PacketsRecv:  c.pktsRecv.Load(),
+		BytesSent:    c.bytesSent.Load(),
+		BytesRecv:    c.bytesRecv.Load(),
+		SmoothedLoss: c.smoothedLoss,
 	}
 }
 
@@ -391,4 +395,11 @@ func dynamicFECParams(lossRate float64) (data, parity int) {
 	default:
 		return 10, 2
 	}
+}
+
+func (c *Conn) smoothAlpha() float64 {
+	if c.cfg != nil && c.cfg.SmoothedLossAlpha > 0 {
+		return c.cfg.SmoothedLossAlpha
+	}
+	return 0.28
 }

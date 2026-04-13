@@ -10,7 +10,7 @@
 ## 安装
 
 ```bash
-go get github.com/nyarime/nrup@v1.2.1
+go get github.com/nyarime/nrup@v1.4.0
 ```
 
 要求 Go 1.22+。

@@ -112,30 +112,31 @@ func (c *Conn) Write(p []byte) (int, error) {
 		}
 	}
 
-	// FEC编码
-	frames := c.fec.Encode(p)
+	// 大包分片：每片≤maxChunk字节，确保FEC shard不超MTU
+	const maxChunk = 1024
+	for off := 0; off < len(p); off += maxChunk {
+		end := off + maxChunk
+		if end > len(p) { end = len(p) }
+		chunk := p[off:end]
 
-	// 记录到重传队列
-	seq := c.fec.seqNum.Load()
-	rto := c.seq.AvgRTT() * 3
-	if rto < 200*time.Millisecond {
-		rto = 200 * time.Millisecond
-	}
-	c.retransmit.Add(seq, frames, rto)
-	c.seq.OnSend(seq)
+		frames := c.fec.Encode(chunk)
+		seq := c.fec.seqNum.Load()
+		rto := c.seq.AvgRTT() * 3
+		if rto < 200*time.Millisecond { rto = 200 * time.Millisecond }
+		c.retransmit.Add(seq, frames, rto)
+		c.seq.OnSend(seq)
 
-	// 发送所有分片（加FrameData前缀）
-	for _, frame := range frames {
-		c.cc.Wait(len(frame) + 1)
-		tagged := append([]byte{FrameData}, frame...)
-		c.dtls.Write(tagged)
+		for _, frame := range frames {
+			tagged := append([]byte{FrameData}, frame...)
+			c.cc.Wait(len(tagged))
+			c.dtls.Write(tagged)
+		}
 	}
 
 	c.bytesSent.Add(int64(len(p)))
 	c.pktsSent.Add(1)
 	return len(p), nil
 }
-
 // Read 接收数据
 func (c *Conn) Read(p []byte) (int, error) {
 	if c.streamMode {

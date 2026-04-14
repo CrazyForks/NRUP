@@ -32,6 +32,7 @@ func Dial(addr string, cfg *Config) (*Conn, error) {
 					cc: NewCongestionController(cfg.MaxBandwidthMbps*1000000/8),
 					seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(cfg.FECData, cfg.FECParity),
 					retransmit: NewRetransmitQueue(), streamMode: cfg.StreamMode, sessionID: cfg.ResumeID}
+				c.adaptive.fecCodec = c.fec
 				go c.startRetransmitLoop()
 				return c, nil
 			}
@@ -71,6 +72,7 @@ func Dial(addr string, cfg *Config) (*Conn, error) {
 		streamMode: cfg.StreamMode,
 		sessionID:  generateSessionID(),
 	}
+	conn.adaptive.fecCodec = conn.fec // FEC有效性反馈
 	go conn.startRetransmitLoop()
 	globalStore.Save(conn.sessionID, key, 24*time.Hour)
 	return conn, nil
@@ -127,6 +129,7 @@ func (l *Listener) Accept() (*Conn, error) {
 				cc: NewCongestionController(l.cfg.MaxBandwidthMbps*1000000/8),
 				seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(l.cfg.FECData, l.cfg.FECParity),
 				retransmit: NewRetransmitQueue(), streamMode: l.cfg.StreamMode, sessionID: sid}
+			conn.adaptive.fecCodec = conn.fec
 			go conn.startRetransmitLoop()
 			return conn, nil
 		}
@@ -178,6 +181,7 @@ func (l *Listener) Accept() (*Conn, error) {
 		sessionID:  generateSessionID(),
 	}
 	go conn.startRetransmitLoop()
+	conn.adaptive.fecCodec = conn.fec
 	return conn, nil
 }
 

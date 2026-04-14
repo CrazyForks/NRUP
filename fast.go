@@ -53,6 +53,7 @@ func NewFastConn(udpConn *net.UDPConn, remoteAddr *net.UDPAddr, key []byte, cfg 
 		adaptive:   NewAdaptiveFEC(cfg.FECData, cfg.FECParity),
 		retransmit: NewRetransmitQueue(),
 	}
+	fc.adaptive.fecCodec = fc.fec
 	fc.startRetransmitLoop()
 	return fc, nil
 }

@@ -18,6 +18,10 @@ type FECCodec struct {
 	encoder      reedsolomon.Encoder
 	seqNum       atomic.Uint32
 	recvPool     map[uint32]*fecGroup
+	// FEC有效性统计
+	fecDecodes   atomic.Int64 // 总解码次数
+	fecRecovered atomic.Int64 // 有shard丢失但成功恢复的次数
+	fecLostShards atomic.Int64 // 总丢失shard数
 }
 
 type fecGroup struct {
@@ -110,12 +114,18 @@ func (f *FECCodec) Decode(frame []byte) []byte {
 	}
 
 	if group.received >= f.dataShards && !group.decoded {
+		var lostCount int
 		for i := 0; i < group.total; i++ {
-			if !group.present[i] { group.shards[i] = nil }
+			if !group.present[i] { group.shards[i] = nil; lostCount++ }
 		}
+		f.fecDecodes.Add(1)
 		err := f.encoder.Reconstruct(group.shards)
 		if err == nil {
 			group.decoded = true
+			if lostCount > 0 {
+				f.fecRecovered.Add(1)
+				f.fecLostShards.Add(int64(lostCount))
+			}
 			// 保留group不删除，防止重传帧创建新group重复解码
 			result := make([]byte, 0, group.dataLen)
 			for i := 0; i < f.dataShards; i++ {
@@ -197,4 +207,18 @@ func (s *StreamEncoder) Flush() [][]byte {
 	frames := s.codec.Encode(s.buffer)
 	s.buffer = s.buffer[:0]
 	return frames
+}
+
+// FECEffectiveness 返回FEC有效性(0.0~1.0)
+// 1.0 = 每次解码都恢复了丢失shard
+// 0.0 = 从未需要恢复(或从未解码)
+func (f *FECCodec) FECEffectiveness() float64 {
+	decodes := f.fecDecodes.Load()
+	if decodes == 0 { return 0 }
+	return float64(f.fecRecovered.Load()) / float64(decodes)
+}
+
+// FECStats 返回FEC统计
+func (f *FECCodec) FECStats() (decodes, recovered, lostShards int64) {
+	return f.fecDecodes.Load(), f.fecRecovered.Load(), f.fecLostShards.Load()
 }

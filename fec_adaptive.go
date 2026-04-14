@@ -6,7 +6,7 @@ import (
 )
 
 // AdaptiveFEC 自适应FEC比例控制
-// 根据实时丢包率自动调整冗余量
+// 根据实时丢包率+FEC有效性自动调整冗余量
 type AdaptiveFEC struct {
 	RTT time.Duration // 当前RTT
 	mu          sync.Mutex
@@ -21,6 +21,8 @@ type AdaptiveFEC struct {
 
 	window  [100]bool // 滑动窗口
 	winIdx  int
+	
+	fecCodec *FECCodec // FEC有效性反馈源
 }
 
 func NewAdaptiveFEC(data, parity int) *AdaptiveFEC {
@@ -87,6 +89,20 @@ func (a *AdaptiveFEC) Adjust() (data, parity int) {
 	default: // >30%
 		a.ParityShards = a.MaxParity
 	}
+
+	// FEC有效性反馈调整
+	if a.fecCodec != nil {
+		eff := a.fecCodec.FECEffectiveness()
+		if eff > 0.8 && a.ParityShards > a.MinParity+1 {
+			a.ParityShards--
+		} else if eff < 0.3 && lossRate > 0.05 {
+			a.ParityShards++
+		}
+	}
+
+	// 限幅
+	if a.ParityShards < a.MinParity { a.ParityShards = a.MinParity }
+	if a.ParityShards > a.MaxParity { a.ParityShards = a.MaxParity }
 
 	// 重置统计
 	a.sent = 0

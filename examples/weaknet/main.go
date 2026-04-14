@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/nyarime/nrup"
@@ -16,91 +16,90 @@ func main() {
 		delay string
 	}{
 		{"正常网络", "0%", "0ms"},
-		{"轻度 1%+50ms", "1%", "50ms"},
-		{"中度 5%+100ms", "5%", "100ms"},
-		{"重度 10%+100ms", "10%", "100ms"},
-		{"极端 20%+200ms", "20%", "200ms"},
-		{"恶劣 30%+200ms", "30%", "200ms"},
+		{"30%丢包", "30%", "50ms"},
+		{"50%丢包", "50%", "50ms"},
+		{"70%丢包", "70%", "50ms"},
 	}
 
-	fmt.Println("═══════════════════════════════════════════════════════")
-	fmt.Println("  NRUP 弱网测试")
-	fmt.Printf("  %-20s | %10s | %8s | %10s\n", "场景", "送达率", "平均延迟", "FEC恢复")
-	fmt.Println("───────────────────────────────────────────────────────")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println("  NRUP v1.4.2 弱网Benchmark (3次平均)")
+	fmt.Printf("  %-12s | %8s | %8s | %6s | %6s\n",
+		"场景", "送达率", "延迟", "FEC效", "Parity")
+	fmt.Println("───────────────────────────────────────────────────────────────")
 
 	for _, sc := range scenarios {
 		exec.Command("tc", "qdisc", "del", "dev", "lo", "root").Run()
+		time.Sleep(100 * time.Millisecond)
 		if sc.loss != "0%" {
 			exec.Command("tc", "qdisc", "add", "dev", "lo", "root", "netem",
-				"loss", sc.loss, "delay", sc.delay, "10ms").Run()
+				"loss", sc.loss, "delay", sc.delay).Run()
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 
-		cfg := nrup.DefaultConfig()
-		sent, recv, latency := runTest(cfg, 30)
+		var totalSent, totalRecv int
+		var totalFECEff float64
+		var totalParity int
+		runs := 3
 
-		fmt.Printf("  %-20s | %3d/%-3d %3.0f%% | %8s | %10s\n",
-			sc.name, recv, sent, float64(recv)/float64(max(sent,1))*100,
-			latency.Round(100*time.Microsecond),
-			fecStatus(sent, recv))
+		for r := 0; r < runs; r++ {
+			sent, recv, stats := runTest(20)
+			totalSent += sent
+			totalRecv += recv
+			totalFECEff += stats.FECEffectiveness
+			totalParity += stats.CurrentParity
+		}
+
+		rate := float64(totalRecv) / float64(max(totalSent, 1)) * 100
+		fmt.Printf("  %-12s | %3d/%-3d %3.0f%% | %6s | %5.1f%% | %5d\n",
+			sc.name, totalRecv/runs, totalSent/runs, rate,
+			"~", totalFECEff/float64(runs)*100, totalParity/runs)
 	}
 
 	exec.Command("tc", "qdisc", "del", "dev", "lo", "root").Run()
-	fmt.Println("═══════════════════════════════════════════════════════")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
 }
 
-func runTest(cfg *nrup.Config, count int) (sent, recv int, avgLat time.Duration) {
+func runTest(count int) (sent, recv int, stats nrup.ConnStats) {
+	cfg := nrup.DefaultConfig()
 	listener, err := nrup.Listen(":0", cfg)
 	if err != nil { return }
 	defer listener.Close()
 
-	var serverRecv atomic.Int64
+	var mu sync.Mutex
+	var serverRecv int
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil { return }
 		defer conn.Close()
 		buf := make([]byte, 4096)
 		for {
-			_, err := conn.Read(buf)
-			if err != nil { return }
-			serverRecv.Add(1)
+			n, err := conn.Read(buf)
+			if err != nil || n == 0 { return }
+			mu.Lock()
+			serverRecv++
+			mu.Unlock()
 		}
 	}()
 
 	conn, err := nrup.Dial(listener.Addr().String(), cfg)
 	if err != nil { return }
 
-	start := time.Now()
 	for i := 0; i < count; i++ {
-		conn.Write([]byte(fmt.Sprintf("test-packet-%04d", i)))
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// 动态等待：直到所有包到达或超时3秒
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if int(serverRecv.Load()) >= count {
-			break
-		}
+		conn.Write([]byte(fmt.Sprintf("pkt-%04d-padding-data-for-fec", i)))
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// 等待FEC恢复
+	time.Sleep(3 * time.Second)
+
+	stats = conn.Stats()
 	conn.Close()
 
 	sent = count
-	recv = int(serverRecv.Load())
-	elapsed := time.Since(start)
-	if recv > 0 {
-		avgLat = elapsed / time.Duration(recv)
-	}
+	mu.Lock()
+	recv = serverRecv
+	mu.Unlock()
 	return
-}
-
-func fecStatus(sent, recv int) string {
-	if recv >= sent { return "✅ 全恢复" }
-	if recv >= sent*9/10 { return "✅ 良好" }
-	if recv >= sent*7/10 { return "⚠️ 部分" }
-	return "❌ 严重丢失"
 }
 
 func max(a, b int) int { if a > b { return a }; return b }

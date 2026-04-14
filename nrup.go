@@ -63,6 +63,7 @@ type Conn struct {
 	readBuf    []byte
 	seenSmall  map[uint32]bool
 	streamEnc  *StreamEncoder
+	sackCount  int // SACK频率控制
 	smoothedLoss float64 // EWMA平滑丢包率
 	sessionID  string // 连接迁移用
 }
@@ -166,10 +167,15 @@ func (c *Conn) Read(p []byte) (int, error) {
 					c.retransmit.ACK(ack.AckSeq)
 					// SACK: bitmap指示后续32个seq的确认状态
 					if ack.Bitmap != 0 {
+						var confirmed int
 						for i := uint32(0); i < 32; i++ {
 							if ack.Bitmap&(1<<i) != 0 {
 								c.retransmit.ACK(ack.AckSeq + i + 1)
+								confirmed++
 							}
+						}
+						if c.cfg.Logger != nil {
+							c.cfg.Logger.Debug("[ARQ] SACK seq=%d confirmed=%d bitmap=%032b", ack.AckSeq, confirmed, ack.Bitmap)
 						}
 					}
 				}
@@ -203,10 +209,14 @@ func (c *Conn) Read(p []byte) (int, error) {
 					c.bytesRecv.Add(int64(len(data)))
 					c.pktsRecv.Add(1)
 					copy(p, data)
-					// 发送SACK ACK（带bitmap）
-					bitmap := c.buildSACKBitmap(seq)
-					ackFrame := EncodeACKFrame(seq, bitmap)
-					c.dtls.Write(ackFrame)
+					// 每3个包发一次SACK（减少ACK流量）
+					c.sackCount++
+					if c.sackCount >= 3 {
+						bitmap := c.buildSACKBitmap(seq)
+						ackFrame := EncodeACKFrame(seq, bitmap)
+						c.dtls.Write(ackFrame)
+						c.sackCount = 0
+					}
 					return len(data), nil
 				}
 				continue

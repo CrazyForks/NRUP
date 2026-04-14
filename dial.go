@@ -2,6 +2,7 @@ package nrup
 
 import (
 	"crypto/rand"
+	"fmt"
 	"net"
 	"time"
 )
@@ -193,4 +194,10 @@ func (l *Listener) Addr() net.Addr {
 // Close 关闭监听
 func (l *Listener) Close() error {
 	return l.udpConn.Close()
+}
+
+func generateSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }

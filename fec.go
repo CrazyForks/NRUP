@@ -2,7 +2,6 @@ package nrup
 
 import (
 	"encoding/binary"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -138,12 +137,6 @@ func (f *FECCodec) Decode(frame []byte) []byte {
 	return nil
 }
 
-func (f *FECCodec) DecodeSingle(frame []byte) ([]byte, error) {
-	if len(frame) < 8 { return nil, errors.New("frame too short") }
-	dataLen := int(binary.BigEndian.Uint16(frame[6:8]))
-	if len(frame) < 8+dataLen { return nil, errors.New("incomplete") }
-	return frame[8 : 8+dataLen], nil
-}
 
 func (f *FECCodec) cleanupStaleGroups() {
 	ticker := time.NewTicker(30 * time.Second)

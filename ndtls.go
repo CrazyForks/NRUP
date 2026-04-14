@@ -249,9 +249,6 @@ func (mc *NDTLSConn) UpdateRemoteAddr(addr net.Addr) {
 }
 
 // RemoteAddr 获取远端地址
-func (mc *NDTLSConn) RemoteAddrInfo() net.Addr {
-	return mc.remoteAddr
-}
 
 // replayWindow 防重放窗口（64位bitmap）
 type replayWindow struct {

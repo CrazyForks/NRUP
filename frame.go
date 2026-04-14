@@ -14,39 +14,8 @@ const (
 
 // DataFrame 数据帧
 // [1B type=0x01][4B seq][1B fecIdx][1B fecTotal][2B dataLen][shard]
-type DataFrame struct {
-	Type     byte
-	Seq      uint32
-	FECIndex byte
-	FECTotal byte
-	DataLen  uint16
-	Shard    []byte
-}
 
-func EncodeDataFrame(seq uint32, fecIdx, fecTotal byte, dataLen uint16, shard []byte) []byte {
-	frame := make([]byte, 9+len(shard))
-	frame[0] = FrameData
-	binary.BigEndian.PutUint32(frame[1:5], seq)
-	frame[5] = fecIdx
-	frame[6] = fecTotal
-	binary.BigEndian.PutUint16(frame[7:9], dataLen)
-	copy(frame[9:], shard)
-	return frame
-}
 
-func DecodeDataFrame(data []byte) *DataFrame {
-	if len(data) < 9 || data[0] != FrameData {
-		return nil
-	}
-	return &DataFrame{
-		Type:     data[0],
-		Seq:      binary.BigEndian.Uint32(data[1:5]),
-		FECIndex: data[5],
-		FECTotal: data[6],
-		DataLen:  binary.BigEndian.Uint16(data[7:9]),
-		Shard:    data[9:],
-	}
-}
 
 // ACKFrame 确认帧
 // [1B type=0x02][4B ackSeq][4B bitmap]
@@ -78,10 +47,6 @@ func DecodeACKFrame(data []byte) *ACKFrame {
 
 // PingFrame 心跳帧
 // [1B type=0x03][8B timestamp]
-type PingFrame struct {
-	Type      byte
-	Timestamp uint64
-}
 
 func EncodePingFrame(ts uint64) []byte {
 	frame := make([]byte, 9)
@@ -90,12 +55,3 @@ func EncodePingFrame(ts uint64) []byte {
 	return frame
 }
 
-func DecodePingFrame(data []byte) *PingFrame {
-	if len(data) < 9 || data[0] != FramePing {
-		return nil
-	}
-	return &PingFrame{
-		Type:      data[0],
-		Timestamp: binary.BigEndian.Uint64(data[1:9]),
-	}
-}

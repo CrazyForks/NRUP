@@ -31,6 +31,7 @@ type Config struct {
 	HandshakeTimeout time.Duration
 	IdleTimeout      time.Duration
 	StreamMode       bool
+	SACKInterval     int // SACK频率(每N包发一次，默认3)
 }
 
 func DefaultConfig() *Config {
@@ -211,7 +212,9 @@ func (c *Conn) Read(p []byte) (int, error) {
 					copy(p, data)
 					// 每3个包发一次SACK（减少ACK流量）
 					c.sackCount++
-					if c.sackCount >= 3 {
+					interval := 3
+					if c.cfg != nil && c.cfg.SACKInterval > 0 { interval = c.cfg.SACKInterval }
+					if c.sackCount >= interval {
 						bitmap := c.buildSACKBitmap(seq)
 						ackFrame := EncodeACKFrame(seq, bitmap)
 						c.dtls.Write(ackFrame)
@@ -424,7 +427,7 @@ func (c *Conn) smoothAlpha() float64 {
 	return 0.28
 }
 
-// buildSACKBitmap 构建SACK位图（标记后续32个seq的接收状态）
+// buildSACKBitmap 构建SACK位图(v1.4.1: 32位，后续可升级uint64)（标记后续32个seq的接收状态）
 func (c *Conn) buildSACKBitmap(baseSeq uint32) uint32 {
 	var bitmap uint32
 	for i := uint32(1); i <= 32; i++ {

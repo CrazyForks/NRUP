@@ -158,14 +158,20 @@ func (c *Conn) Read(p []byte) (int, error) {
 		if n > 0 {
 			switch buf[0] {
 			case FrameACK:
-				// 处理ACK
 				ack := DecodeACKFrame(buf[:n])
 				if ack != nil {
 					rtt := c.seq.OnRecvACK(ack.AckSeq)
 					c.cc.OnACK(int64(n), rtt)
-				// 反馈RTT给FEC自适应
-				c.adaptive.RTT = rtt
+					c.adaptive.RTT = rtt
 					c.retransmit.ACK(ack.AckSeq)
+					// SACK: bitmap指示后续32个seq的确认状态
+					if ack.Bitmap != 0 {
+						for i := uint32(0); i < 32; i++ {
+							if ack.Bitmap&(1<<i) != 0 {
+								c.retransmit.ACK(ack.AckSeq + i + 1)
+							}
+						}
+					}
 				}
 				continue
 
@@ -197,6 +203,10 @@ func (c *Conn) Read(p []byte) (int, error) {
 					c.bytesRecv.Add(int64(len(data)))
 					c.pktsRecv.Add(1)
 					copy(p, data)
+					// 发送SACK ACK（带bitmap）
+					bitmap := c.buildSACKBitmap(seq)
+					ackFrame := EncodeACKFrame(seq, bitmap)
+					c.dtls.Write(ackFrame)
 					return len(data), nil
 				}
 				continue
@@ -402,4 +412,15 @@ func (c *Conn) smoothAlpha() float64 {
 		return c.cfg.SmoothedLossAlpha
 	}
 	return 0.28
+}
+
+// buildSACKBitmap 构建SACK位图（标记后续32个seq的接收状态）
+func (c *Conn) buildSACKBitmap(baseSeq uint32) uint32 {
+	var bitmap uint32
+	for i := uint32(1); i <= 32; i++ {
+		if c.smallPktSeen(baseSeq + i) {
+			bitmap |= 1 << (i - 1)
+		}
+	}
+	return bitmap
 }

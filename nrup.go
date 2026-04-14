@@ -248,6 +248,15 @@ func (c *Conn) SetWriteDeadline(t time.Time) error { return c.dtls.SetWriteDeadl
 // Stats 获取统计
 func (c *Conn) Stats() ConnStats {
 	sent, lost, rtt, lossRate := c.seq.Stats()
+	// FEC统计
+	var fecD, fecR, fecL int64
+	var fecEff float64
+	if c.fec != nil {
+		fecD, fecR, fecL = c.fec.FECStats()
+		fecEff = c.fec.FECEffectiveness()
+	}
+	var parity int
+	if c.adaptive != nil { parity = c.adaptive.ParityShards }
 	return ConnStats{
 		Sent:        sent,
 		Lost:        lost,
@@ -256,6 +265,11 @@ func (c *Conn) Stats() ConnStats {
 		RetransmitQ:   c.retransmit.Size(),
 		BytesSent:     c.bytesSent.Load(),
 		BytesReceived: c.bytesRecv.Load(),
+		FECDecodes:      fecD,
+		FECRecovered:    fecR,
+		FECLostShards:   fecL,
+		FECEffectiveness: fecEff,
+		CurrentParity:   parity,
 	}
 }
 
@@ -268,6 +282,12 @@ type ConnStats struct {
 	Cwnd          int64
 	PacingRate    int64
 	State         string
+	// v1.4.2: FEC + SACK统计
+	FECDecodes      int64   // FEC解码总次数
+	FECRecovered    int64   // FEC恢复丢失shard次数
+	FECLostShards   int64   // 总丢失shard数
+	FECEffectiveness float64 // FEC有效性(0.0~1.0)
+	CurrentParity   int     // 当前FEC冗余分片数
 	BytesSent     int64
 	BytesReceived int64
 }
@@ -343,17 +363,30 @@ type Metrics struct {
 	BytesRecv     int64   `json:"bytes_recv"`
 	RetransmitCount int64 `json:"retransmit_count"`
 	FECRecovery   int64   `json:"fec_recovery"`
+	FECEffectiveness float64 `json:"fec_effectiveness"`
+	CurrentParity int     `json:"current_parity"`
 	LossRate      float64 `json:"loss_rate"`
 	SmoothedLoss  float64 `json:"smoothed_loss"`
 }
 
 // GetMetrics 获取连接指标
 func (c *Conn) GetMetrics() Metrics {
+	var fecEff float64
+	var fecRec int64
+	var parity int
+	if c.fec != nil {
+		_, fecRec, _ = c.fec.FECStats()
+		fecEff = c.fec.FECEffectiveness()
+	}
+	if c.adaptive != nil { parity = c.adaptive.ParityShards }
 	return Metrics{
 		PacketsSent:  c.pktsSent.Load(),
 		PacketsRecv:  c.pktsRecv.Load(),
 		BytesSent:    c.bytesSent.Load(),
 		BytesRecv:    c.bytesRecv.Load(),
+		FECRecovery:  fecRec,
+		FECEffectiveness: fecEff,
+		CurrentParity: parity,
 		SmoothedLoss: c.smoothedLoss,
 	}
 }

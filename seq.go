@@ -9,12 +9,15 @@ import (
 type SeqTracker struct {
 	mu        sync.Mutex
 	nextSeq   uint32
-	ackMap    map[uint32]time.Time // seq → 发送时间
-	received  map[uint32]bool      // 收到的seq
+	ackMap    map[uint32]time.Time
+	received  map[uint32]bool
 	rttSum    time.Duration
 	rttCount  int
 	lostCount int
 	sentCount int
+	// v1.4.3: jitter跟踪
+	lastRTT   time.Duration
+	jitter    time.Duration // EWMA RTT抖动
 }
 
 func NewSeqTracker() *SeqTracker {
@@ -42,6 +45,13 @@ func (s *SeqTracker) OnRecvACK(seq uint32) time.Duration {
 		return 0
 	}
 	rtt := time.Since(sendTime)
+	// v1.4.3: 计算jitter (EWMA)
+	if s.lastRTT > 0 {
+		diff := rtt - s.lastRTT
+		if diff < 0 { diff = -diff }
+		s.jitter = s.jitter*7/8 + diff/8 // EWMA α=0.125
+	}
+	s.lastRTT = rtt
 	s.rttSum += rtt
 	s.rttCount++
 	delete(s.ackMap, seq)
@@ -100,4 +110,11 @@ func (s *SeqTracker) Stats() (sent, lost int, rtt time.Duration, lossRate float6
 		lossRate = float64(lost) / float64(sent)
 	}
 	return
+}
+
+// Jitter 返回当前RTT抖动
+func (s *SeqTracker) Jitter() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jitter
 }

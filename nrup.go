@@ -65,6 +65,8 @@ type Conn struct {
 	seenSmall  map[uint32]bool
 	streamEnc  *StreamEncoder
 	sackCount  int // SACK频率控制
+	mtu        int // 缓存的MTU(动态探测)
+	ackBatch   []ACKFrame // v1.4.3: 批量ACK缓冲
 	smoothedLoss float64 // EWMA平滑丢包率
 	sessionID  string // 连接迁移用
 }
@@ -160,25 +162,12 @@ func (c *Conn) Read(p []byte) (int, error) {
 		if n > 0 {
 			switch buf[0] {
 			case FrameACK:
-				ack := DecodeACKFrame(buf[:n])
-				if ack != nil {
-					rtt := c.seq.OnRecvACK(ack.AckSeq)
-					c.cc.OnACK(int64(n), rtt)
-					c.adaptive.RTT = rtt
-					c.retransmit.ACK(ack.AckSeq)
-					// SACK: bitmap指示后续32个seq的确认状态
-					if ack.Bitmap != 0 {
-						var confirmed int
-						for i := uint32(0); i < 32; i++ {
-							if ack.Bitmap&(1<<i) != 0 {
-								c.retransmit.ACK(ack.AckSeq + i + 1)
-								confirmed++
-							}
-						}
-						if c.cfg.Logger != nil {
-							c.cfg.Logger.Debug("[ARQ] SACK seq=%d confirmed=%d bitmap=%032b", ack.AckSeq, confirmed, ack.Bitmap)
-						}
-					}
+				c.processACK(DecodeACKFrame(buf[:n]))
+				continue
+
+			case FrameBatchACK:
+				for _, ack := range DecodeBatchACK(buf[:n]) {
+					c.processACK(&ack)
 				}
 				continue
 
@@ -214,10 +203,15 @@ func (c *Conn) Read(p []byte) (int, error) {
 					c.sackCount++
 					interval := 3
 					if c.cfg != nil && c.cfg.SACKInterval > 0 { interval = c.cfg.SACKInterval }
+					// v1.4.3: 批量ACK
+					c.ackBatch = append(c.ackBatch, ACKFrame{AckSeq: seq, Bitmap: c.buildSACKBitmap(seq)})
 					if c.sackCount >= interval {
-						bitmap := c.buildSACKBitmap(seq)
-						ackFrame := EncodeACKFrame(seq, bitmap)
-						c.dtls.Write(ackFrame)
+						if len(c.ackBatch) > 1 {
+							c.dtls.Write(EncodeBatchACK(c.ackBatch))
+						} else {
+							c.dtls.Write(EncodeACKFrame(seq, c.buildSACKBitmap(seq)))
+						}
+						c.ackBatch = c.ackBatch[:0]
 						c.sackCount = 0
 					}
 					return len(data), nil
@@ -270,6 +264,8 @@ func (c *Conn) Stats() ConnStats {
 		FECLostShards:   fecL,
 		FECEffectiveness: fecEff,
 		CurrentParity:   parity,
+		MTU:             c.mtu,
+		Jitter:          c.seq.Jitter(),
 	}
 }
 
@@ -288,6 +284,8 @@ type ConnStats struct {
 	FECLostShards   int64   // 总丢失shard数
 	FECEffectiveness float64 // FEC有效性(0.0~1.0)
 	CurrentParity   int     // 当前FEC冗余分片数
+	MTU             int     // 探测的MTU
+	Jitter          time.Duration // RTT抖动
 	BytesSent     int64
 	BytesReceived int64
 }
@@ -327,19 +325,22 @@ func (c *Conn) SessionID() string {
 	return c.sessionID
 }
 
-// DiscoverMTU 探测路径MTU
+// DiscoverMTU 探测路径MTU（结果缓存）
 func (c *Conn) DiscoverMTU() int {
+	if c.mtu > 0 { return c.mtu } // 缓存
 	if dtls, ok := c.dtls.(*NDTLSConn); ok {
 		for mtu := 1500; mtu >= 500; mtu -= 100 {
 			probe := make([]byte, mtu)
 			probe[0] = FramePing
 			_, err := dtls.Write(probe)
 			if err == nil {
-				return mtu - 41 // 减去NRUP开销(13 header + 12 nonce + 16 tag)
+				c.mtu = mtu - 41 // NRUP开销(13+12+16)
+				return c.mtu
 			}
 		}
 	}
-	return 1200 // 安全默认值
+	c.mtu = 1200
+	return c.mtu
 }
 
 // Logger 日志接口
@@ -469,4 +470,21 @@ func (c *Conn) buildSACKBitmap(baseSeq uint32) uint32 {
 		}
 	}
 	return bitmap
+}
+
+// processACK 处理单个ACK(含SACK bitmap)
+func (c *Conn) processACK(ack *ACKFrame) {
+	if ack == nil { return }
+	rtt := c.seq.OnRecvACK(ack.AckSeq)
+	c.cc.OnACK(int64(9), rtt)
+	c.adaptive.RTT = rtt
+	c.retransmit.UpdateJitter(c.seq.Jitter())
+	c.retransmit.ACK(ack.AckSeq)
+	if ack.Bitmap != 0 {
+		for i := uint32(0); i < 32; i++ {
+			if ack.Bitmap&(1<<i) != 0 {
+				c.retransmit.ACK(ack.AckSeq + i + 1)
+			}
+		}
+	}
 }

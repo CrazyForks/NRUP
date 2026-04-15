@@ -10,6 +10,8 @@ type RetransmitQueue struct {
 	mu       sync.Mutex
 	pending  map[uint32]*retransmitEntry
 	maxRetry int
+	// v1.4.3: 预测性重传
+	jitter   time.Duration // RTT抖动
 }
 
 type retransmitEntry struct {
@@ -44,7 +46,7 @@ func (rq *RetransmitQueue) ACK(seq uint32) {
 	rq.mu.Unlock()
 }
 
-// GetExpired 获取需要重传的帧
+// GetExpired 获取需要重传的帧(含预测性重传)
 func (rq *RetransmitQueue) GetExpired() []retransmitResult {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
@@ -53,9 +55,14 @@ func (rq *RetransmitQueue) GetExpired() []retransmitResult {
 	now := time.Now()
 
 	for seq, entry := range rq.pending {
-		if now.Sub(entry.sentAt) > entry.rto {
+		elapsed := now.Sub(entry.sentAt)
+		// v1.4.3: 预测性重传——当RTT抖动大时，提前0.8*RTO就重传
+		threshold := entry.rto
+		if rq.jitter > entry.rto/4 {
+			threshold = entry.rto * 4 / 5 // 提前20%
+		}
+		if elapsed > threshold {
 			if entry.retries >= rq.maxRetry {
-				// 超过最大重试，放弃
 				delete(rq.pending, seq)
 				continue
 			}
@@ -68,6 +75,13 @@ func (rq *RetransmitQueue) GetExpired() []retransmitResult {
 		}
 	}
 	return results
+}
+
+// UpdateJitter 更新RTT抖动
+func (rq *RetransmitQueue) UpdateJitter(jitter time.Duration) {
+	rq.mu.Lock()
+	rq.jitter = jitter
+	rq.mu.Unlock()
 }
 
 type retransmitResult struct {

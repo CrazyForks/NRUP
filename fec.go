@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
+	"github.com/nyarime/gofec/ldpc"
 	"time"
 
 	"github.com/klauspost/reedsolomon"
@@ -21,6 +22,9 @@ type FECCodec struct {
 	fecDecodes   atomic.Int64 // 总解码次数
 	fecRecovered atomic.Int64 // 有shard丢失但成功恢复的次数
 	fecLostShards atomic.Int64 // 总丢失shard数
+	// GoFEC LDPC
+	ldpcCodec *ldpc.Codec
+	useLDPC   bool
 }
 
 type fecGroup struct {

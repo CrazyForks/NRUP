@@ -10,5 +10,6 @@ require (
 require (
 	github.com/google/gofountain v0.0.0-20160820054803-4928733085e9 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/nyarime/gofec v1.1.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 )

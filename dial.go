@@ -29,7 +29,7 @@ func Dial(addr string, cfg *Config) (*Conn, error) {
 	if cfg.ResumeID != "" {
 		if key, ok := clientResume(udpConn, rAddr, cfg.ResumeID); ok {
 			if dtls, err := NewNDTLS(udpConn, rAddr, key, cfg); err == nil {
-				c := &Conn{dtls: dtls, fec: NewFECCodec(cfg.FECData, cfg.FECParity),
+				c := &Conn{dtls: dtls, fec: NewFECByType(cfg.FECType, cfg.FECData, cfg.FECParity),
 					cc: NewCongestionController(cfg.MaxBandwidthMbps*1000000/8),
 					seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(cfg.FECData, cfg.FECParity),
 					retransmit: NewRetransmitQueue(), streamMode: cfg.StreamMode, sessionID: cfg.ResumeID}
@@ -65,7 +65,7 @@ func Dial(addr string, cfg *Config) (*Conn, error) {
 
 	conn := &Conn{
 		dtls:       dtlsConn,
-		fec:        NewFECCodec(cfg.FECData, cfg.FECParity),
+		fec:        NewFECByType(cfg.FECType, cfg.FECData, cfg.FECParity),
 		cc:         NewCongestionController(cfg.MaxBandwidthMbps * 1000000 / 8),
 		seq:        NewSeqTracker(),
 		adaptive:   NewAdaptiveFEC(cfg.FECData, cfg.FECParity),
@@ -126,7 +126,7 @@ func (l *Listener) Accept() (*Conn, error) {
 	if n > 0 && buf[0] == frameResume {
 		if key, sid, ok := serverResume(dc, clientAddr, buf[:n]); ok {
 			dtlsConn, _ := NewNDTLS(dc, clientAddr, key, l.cfg)
-			conn := &Conn{cfg: l.cfg, dtls: dtlsConn, fec: NewFECCodec(l.cfg.FECData, l.cfg.FECParity),
+			conn := &Conn{cfg: l.cfg, dtls: dtlsConn, fec: NewFECByType(l.cfg.FECType, l.cfg.FECData, l.cfg.FECParity),
 				cc: NewCongestionController(l.cfg.MaxBandwidthMbps*1000000/8),
 				seq: NewSeqTracker(), adaptive: NewAdaptiveFEC(l.cfg.FECData, l.cfg.FECParity),
 				retransmit: NewRetransmitQueue(), streamMode: l.cfg.StreamMode, sessionID: sid}
@@ -173,7 +173,7 @@ func (l *Listener) Accept() (*Conn, error) {
 
 	conn := &Conn{
 		dtls:       dtlsConn,
-		fec:        NewFECCodec(l.cfg.FECData, l.cfg.FECParity),
+		fec:        NewFECByType(l.cfg.FECType, l.cfg.FECData, l.cfg.FECParity),
 		cc:         NewCongestionController(l.cfg.MaxBandwidthMbps * 1000000 / 8),
 		seq:        NewSeqTracker(),
 		adaptive:   NewAdaptiveFEC(l.cfg.FECData, l.cfg.FECParity),

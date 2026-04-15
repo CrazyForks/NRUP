@@ -1,3 +1,5 @@
+github.com/google/gofountain v0.0.0-20160820054803-4928733085e9 h1:Ngb7dbv9x/c5wWGpGxicH4iN8g90++AcRjwjHSllofA=
+github.com/google/gofountain v0.0.0-20160820054803-4928733085e9/go.mod h1:5K3gm9YuA6H5iBSG5JugS+7xTT0fK+E5zf8On8bgz1w=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/klauspost/reedsolomon v1.13.3 h1:01GwnO2xoCSaM0ShP4qwl+FsHg3csFShC6Tu/RS1ji0=

@@ -13,22 +13,27 @@ func NewFECByType(fecType FECType, data, parity int) *FECCodec {
 		log.Printf("[FEC] 使用LDPC (GoFEC PEG, %d数据+%d校验)", data, parity)
 		return newLDPCWrapped(data, parity)
 	case FECTypeRaptorQ:
-		log.Printf("[FEC] 使用LT喷泉码 (%d源块)", data)
-		return NewFECCodec(data, parity) // LT暂用RS包装
-	default: // RS
+		log.Printf("[FEC] 使用RaptorQ (GoFEC, %d源块+%d修复)", data, parity)
+		return newRaptorQWrapped(data, parity)
+	default:
 		log.Printf("[FEC] 使用Reed-Solomon (%d+%d)", data, parity)
 		return NewFECCodec(data, parity)
 	}
 }
 
-// newLDPCWrapped 包装GoFEC LDPC为FECCodec兼容接口
+// newLDPCWrapped 包装GoFEC LDPC
 func newLDPCWrapped(data, parity int) *FECCodec {
-	// LDPC编解码器
 	codec := ldpc.New(data, parity, 0.3)
-	
-	// 包装成FECCodec(复用现有帧格式和序号)
 	fec := NewFECCodec(data, parity)
 	fec.ldpcCodec = codec
 	fec.useLDPC = true
+	return fec
+}
+
+// newRaptorQWrapped 包装GoFEC RaptorQ
+func newRaptorQWrapped(data, parity int) *FECCodec {
+	fec := NewFECCodec(data, parity)
+	fec.raptorqCodec = NewRaptorQCodec(data, 64) // 64字节/符号(UDP包大小友好)
+	fec.useRaptorQ = true
 	return fec
 }

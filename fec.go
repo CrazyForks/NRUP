@@ -25,6 +25,8 @@ type FECCodec struct {
 	// GoFEC LDPC
 	ldpcCodec *ldpc.Codec
 	useLDPC   bool
+	useRaptorQ    bool
+	raptorqCodec  *RaptorQCodec
 }
 
 type fecGroup struct {
